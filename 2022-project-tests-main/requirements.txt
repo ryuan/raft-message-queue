@@ -1,0 +1,3 @@
+pyzmq
+requests
+pytest
