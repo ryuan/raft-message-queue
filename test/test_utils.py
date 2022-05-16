@@ -40,16 +40,30 @@ class Node:
             str(self.i),
         ]
 
-        context = zmq.Context()
-        self.req_socket = context.socket(zmq.REQ)
+        self.context = zmq.Context()
+        self.req_socket = None
+        self.reset_socket()
+
+    def reset_socket(self):
+        if self.req_socket is not None:
+            self.req_socket.close()
+        self.req_socket = self.context.socket(zmq.REQ)
         self.req_socket.RCVTIMEO = REQUEST_TIMEOUT
         self.req_socket.connect(f"tcp://127.0.0.1:{self.get_port()}")
 
     def send_json(self, message: Dict):
-        self.req_socket.send_json(message)
+        try:
+            self.req_socket.send_json(message)
+        except Exception as e:
+            self.reset_socket()
+            raise zmq.error.ZMQError
 
     def recv_json(self):
-        return self.req_socket.recv_json()
+        try:
+            return self.req_socket.recv_json()
+        except Exception as e:
+            self.reset_socket()
+            raise zmq.error.ZMQError
 
     def start(self, sleep=0):
         self.process = Popen(
@@ -84,8 +98,8 @@ class Node:
         time.sleep(sleep)
 
     def restart(self, sleep=0):
-        self.clean()
-        self.start()
+        self.clean(sleep)
+        self.start(sleep)
         time.sleep(sleep)
 
     def wait_for_startup(self):
@@ -155,7 +169,7 @@ class Swarm:
 
     def start(self, sleep=0):
         for node in self.nodes:
-            node.start()
+            node.start(sleep)
             node.wait_for_startup()
         time.sleep(sleep)
 
@@ -165,12 +179,12 @@ class Swarm:
 
     def clean(self, sleep=0):
         for node in self.nodes:
-            node.clean()
+            node.clean(sleep)
         time.sleep(sleep)
 
     def restart(self, sleep=0):
         for node in self.nodes:
-            node.clean()
+            node.clean(sleep)
             node.start()
         time.sleep(sleep)
 
