@@ -131,6 +131,7 @@ class Node:
             try:
                 print(f"Sending request to port {port}")
                 peer_socket.send_json(message)
+                time.sleep(1e-5)
                 peer_socket.close()
             except Exception as e:
                 print("Closing socket due to error ", str(e))
@@ -200,11 +201,17 @@ class Node:
             if port == rec_port:
                 socket.connect(f"tcp://{ip}:{rec_port}")
 
-        socket.send_json(message)
-        print(f"Sent result to {rec_port}: {message}")
+        try:
+            socket.send_json(message)
+            print(f"Sent result to {rec_port}: {message}")
+            time.sleep(1e-5)
+            socket.close()
 
-        response = socket.recv_json()
-        print(f"Received response from {rec_port}: {response}")
+            response = socket.recv_json()
+            print(f"Received response from {rec_port}: {response}")
+        except Exception as e:
+            print("Closing socket due to error ", str(e))
+            socket.close()
 
     def process_vote(self, port):
         self.log_manager.votes_collected[port] = True
