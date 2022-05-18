@@ -5,18 +5,20 @@ import os
 class LogManager:
     client_lock = threading.Lock()
 
-    def __init__(self, server_id):
+    def __init__(self, server_id, peers):
         self.server_id = server_id
+
         self.data = {}
-        self.server_cluster = {}
-        self.voted_for_me = {}
         self.log = []
-        self.catch_up_successful = False
+
+        self.voted_for = None
+        self.votes_collected = {}
+
         self.current_term = 0
         self.last_log_index = 1
         self.last_log_term = 0
 
-        self.log_recently_changed = False
+        self.reset_votes(peers)
 
     def keys(self):
         return list(self.data.keys())
@@ -35,3 +37,7 @@ class LogManager:
 
     def delete(self, key):
         del self.data[key]
+
+    def reset_votes(self, peers):
+        for ip, port in peers:
+            self.votes_collected[port] = False

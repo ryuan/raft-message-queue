@@ -4,7 +4,7 @@ from threading import Timer
 
 # https://stackoverflow.com/a/56169014
 class ResettableTimer:
-    def __init__(self, function, interval_lb=8000, interval_ub=15000):
+    def __init__(self, function, interval_lb=1500, interval_ub=2000):
         self.interval = (interval_lb, interval_ub)
         self.function = function
         self.timer = Timer(self._interval(), self.function)
@@ -16,6 +16,9 @@ class ResettableTimer:
 
     def start(self):
         self.timer.start()
+
+    def stop(self):
+        self.timer.cancel()
 
     def reset(self):
         self.timer.cancel()

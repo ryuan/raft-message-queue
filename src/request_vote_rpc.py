@@ -9,15 +9,17 @@ class RequestVote:
     last_log_term: int
 
     def to_message(self):
-        return asdict(self)
+        message = {"type": "vote", "method": "REQ", "message": asdict(self)}
+        return message
 
     @classmethod
     def from_message(cls, message):
-        numeric_markers = message.replace("can_I_count_on_your_vote_in_term ", "").split(" ")
-        current_term, index, latest_log_term = int(numeric_markers[0]), int(numeric_markers[3]), int(numeric_markers[4])
+        req_data = message["message"]
+        req_term, req_id, req_last_log_index, req_last_log_term = req_data["term"], req_data["candidate_id"], req_data["last_log_index"], req_data["last_log_term"]
 
         return RequestVote(
-            term=current_term,
-            last_log_index=index,
-            last_log_term=latest_log_term,
+            term=req_term,
+            candidate_id=req_id,
+            last_log_index=req_last_log_index,
+            last_log_term=req_last_log_term,
         )

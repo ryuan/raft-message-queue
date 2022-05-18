@@ -48,8 +48,14 @@ class Node:
         if self.req_socket is not None:
             self.req_socket.close()
         self.req_socket = self.context.socket(zmq.REQ)
+        self.req_socket.setsockopt(zmq.LINGER, 0)
+        self.req_socket.setsockopt(zmq.IMMEDIATE, 1)
         self.req_socket.RCVTIMEO = REQUEST_TIMEOUT
         self.req_socket.connect(f"tcp://127.0.0.1:{self.get_port()}")
+
+    def close_socket(self):
+        self.req_socket.close()
+        self.context.term()
 
     def send_json(self, message: Dict):
         try:
@@ -73,9 +79,11 @@ class Node:
         time.sleep(sleep)
 
     def terminate(self):
+        self.close_socket()
         self.process.terminate()
 
     def kill(self):
+        self.close_socket()
         self.process.kill()
 
     def wait(self):
@@ -156,6 +164,7 @@ class Node:
 
 class Swarm:
     def __init__(self, program_file_path: str, num_nodes: int):
+        print(num_nodes)
         self.num_nodes = num_nodes
 
         # create the config

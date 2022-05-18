@@ -3,9 +3,11 @@ import json
 import sys
 import time
 from threading import Thread
+
 from timer import ResettableTimer
-from request_vote_rpc import RequestVote
 from log_manager import LogManager
+from request_vote_rpc import RequestVote
+from append_entries_rpc import AppendEntries
 
 
 class Node:
@@ -13,17 +15,17 @@ class Node:
         self.ip, self.port, self.peers = self.parse_config_json(fp, idx)
 
         self.role = 'Follower'
-        self.currentTerm = 0
-        self.commitIndex = 0
-        self.lastApplied = 0
 
-        self.log_manager = LogManager(self.port)
+        self.commit_index = 0
+        self.last_applied = 0
 
+        self.log_manager = LogManager(self.port, self.peers)
 
         self.election_countdown = ResettableTimer(self.start_election)
+        self.heartbeat_countdown = None
 
         self.start_listening()
-        self.start_follower()
+        self.follower()
 
     def start_listening(self):
         self.listener_thread = Thread(target=self.listen, args=(self.ip, self.port))
@@ -42,107 +44,209 @@ class Node:
                 message = socket.recv_json()
                 print("Received message: ", message)
 
-                if message["type"] == "topic" and message["method"] == "PUT":
-                    if message["topic"] not in self.log_manager.keys() and isinstance(message["topic"], str):
-                        self.log_manager.set(message["topic"], [])
-                        socket.send_json({"success": True})
-                    else:
-                        socket.send_json({"success": False})
-                elif message["type"] == "topic" and message["method"] == "GET":
-                    socket.send_json({"success": True, "topics": self.log_manager.keys()})
-
-                elif message["type"] == "message" and message["method"] == "PUT":
-                    if message["topic"] in self.log_manager.keys() and isinstance(message["topic"], str) and isinstance(message["message"], str):
-                        self.log_manager.append(message["topic"], message["message"])
-                        socket.send_json({"success": True})
-                    else:
-                        socket.send_json({"success": False})
-                elif message["type"] == "message" and message["method"] == "GET":
-                    if isinstance(message["topic"], str) and self.log_manager.data.get(message["topic"]):
-                        socket.send_json({"success": True, "message": self.log_manager.pop(message["topic"])})
-                    else:
-                        socket.send_json({"success": False})
-
-                elif message["type"] == "status" and message["method"] == "GET":
-                    socket.send_json({"role": self.role, "term": 0})
+                if message["type"] == "vote" or message["type"] == "heartbeat":
+                    self.respond_server(socket, message)
                 else:
-                    socket.send_json({"fatal_failure": True})
+                    self.respond_client(socket, message)
 
-                time.sleep(0.1)
-
+                time.sleep(1e-5)
         except:
             socket.close()
             context.term()
 
-    def start_follower(self):
-        print("Node is running as a follower.")
+    def follower(self):
+        print("\nNode is running as a follower.")
 
         self.role = 'Follower'
-        self.follower_thread = Thread(target=self.follower)
-        self.follower_thread.start()
-
-    def follower(self):
-        self.election_countdown.start()
-        print("Server started with timeout of: " + str(self.election_countdown.gen_time))
-
-        # self.role = 'Follower'
-        # self.last_update = time.time()
-        # election_timeout = 5 * random.random() + 5
-        
-        # while time.time() - self.last_update <= election_timeout:
-        #     print(time.time() - self.last_update)
-        #     pass
-        # self.start_election()
-
-        # while True:
-        #     self.last_update = time.time()
-        #     election_timeout = 5 * random.random() + 5
-            
-        #     while time.time() - self.last_update <= election_timeout:
-        #         pass
-        #     if self.election_thread.is_alive():
-        #         self.election_thread.kill()
-        #     self.start_election()
-
-    def start_election(self):
-        print("Node is now a candidate.")
-
-        self.role = 'Candidate'
-        self.election_thread = Thread(target=self.candidate)
-        self.election_thread.start()
-
-    def candidate(self):
-        print("I'm going to collect votes")
+        self.heartbeat_countdown = None
 
         self.election_countdown.reset()
-        print("Election started with timeout of: " + str(self.election_countdown.gen_time))
+        print("Election timer started with timeout of: " + str(self.election_countdown.gen_time))
 
-        self.broadcast(RequestVote(
-            self.log_manager.current_term, 
-            self.port, 
-            self.log_manager.last_log_index, 
-            self.log_manager.last_log_term).to_message()
+        self.log_manager.voted_for = None
+
+    def start_election(self):
+        print("\nNode started an election and will now collect votes.")
+
+        self.log_manager.current_term += 1
+        self.log_manager.reset_votes(self.peers)
+
+        self.candidate()
+
+    def candidate(self):
+        print("Node is running as a candidate.")
+
+        self.role = 'Candidate'
+        self.election_countdown.reset()
+        print("Election timer started with timeout of: " + str(self.election_countdown.gen_time))
+
+        self.log_manager.voted_for = self.port
+        self.process_vote(self.port)
+
+        if self.role != 'Leader':
+            self.broadcast(
+                RequestVote(
+                    term=self.log_manager.current_term, 
+                    candidate_id=self.port, 
+                    last_log_index=self.log_manager.last_log_index, 
+                    last_log_term=self.log_manager.last_log_term
+                ).to_message()
             )
 
+    def leader(self):
+        print("\nNode is running as a leader.")
+
+        self.role = 'Leader'
+
+        self.election_countdown.stop()
+
+        self.heartbeat()
+
+    def heartbeat(self):
+        self.broadcast(
+            AppendEntries(
+                term=self.log_manager.current_term,
+                leader_id=self.port,
+                prev_log_index=self.log_manager.last_log_index,
+                prev_log_term=self.log_manager.last_log_term,
+                entries=[],
+                leader_commit=self.commit_index
+            ).to_message()
+        )
+
+        self.heartbeat_countdown = ResettableTimer(self.heartbeat, interval_lb=1000, interval_ub=1200)
+        self.heartbeat_countdown.start()
+        print("Heartbeat timer started with timeout of: " + str(self.heartbeat_countdown.gen_time))
+
     def broadcast(self, message):
-        print("Broadcasting vote request message to peers:", message)
+        print("Broadcasting request message to peers:", message)
         print("Identified peers: ", self.peers)
 
         peer_context = zmq.Context()
 
         for ip, port in self.peers:
-            print(port)
             peer_socket = peer_context.socket(zmq.REQ)
             peer_socket.connect(f"tcp://{ip}:{port}")
 
             try:
-                print(f"Sending vote request to port {port}")
+                print(f"Sending request to port {port}")
                 peer_socket.send_json(message)
-                time.sleep(0.5)
                 peer_socket.close()
             except Exception as e:
                 print("Closing socket due to error ", str(e))
                 peer_socket.close()
+
+    def respond_server(self, socket, message):
+        if message["type"] == "vote" and message["method"] == "REQ":
+            request = RequestVote.from_message(message)
+
+            if (request.term > self.log_manager.current_term 
+                and request.last_log_index >= self.log_manager.last_log_index 
+                and request.last_log_term >= self.log_manager.last_log_term
+                and (self.log_manager.voted_for == None or self.log_manager.voted_for == request.candidate_id)):
+                result = {"port": self.port, "term": self.log_manager.current_term, "vote": True}
+            else:
+                result = {"port": self.port, "term": self.log_manager.current_term, "vote": False}
+
+            response = {"type": "vote", "method": "RES", "message": result}
+            socket.send_json(response)
+
+            self.log_manager.voted_for = request.candidate_id
+            self.send_result(request.candidate_id, response)
+        elif message["type"] == "vote" and message["method"] == "RES":
+            v_port, v_term, vote = message["message"]["port"], message["message"]["term"], message["message"]["vote"]
+
+            if vote == True:
+                self.process_vote(v_port)
+            else:
+                pass
+
+            socket.send_json("ok")
+        elif message["type"] == "heartbeat" and message["method"] == "REQ":
+            request = AppendEntries.from_message(message)
+
+            if request.term < self.log_manager.current_term:
+                result = {"port": self.port, "term": self.log_manager.current_term, "success": False}
+            else:
+                self.follower()
+                if self.heartbeat_countdown:
+                    self.heartbeat_countdown = None
+                self.log_manager.current_term = request.term
+
+                # need to update log and data
+                pass
+
+                result = {"term": self.log_manager.current_term, "success": True}
+
+            response = {"type": "heartbeat", "method": "RES", "message": result}
+            socket.send_json(response)
+
+            self.send_result(request.leader_id, response)
+        elif message["type"] == "heartbeat" and message["method"] == "RES":
+            f_term, f_success = message["message"]["term"], message["message"]["success"]
+
+            # double check that term from response is higher
+            if f_success == False and f_term > self.log_manager.current_term:
+                # need to update log and data to term
+                pass
+
+            socket.send_json("ok")
+
+    def send_result(self, rec_port, message):
+        context = zmq.Context()
+        socket = context.socket(zmq.REQ)
+
+        for ip, port in self.peers:
+            if port == rec_port:
+                socket.connect(f"tcp://{ip}:{rec_port}")
+
+        socket.send_json(message)
+        print(f"Sent result to {rec_port}: {message}")
+
+        response = socket.recv_json()
+        print(f"Received response from {rec_port}: {response}")
+
+    def process_vote(self, port):
+        self.log_manager.votes_collected[port] = True
+
+        count_trues = len(list(filter(lambda x: x is True, self.log_manager.votes_collected.values())))
+        count_falses = len(list(filter(lambda x: x is False, self.log_manager.votes_collected.values())))
+
+        print(count_trues)
+        print(count_falses)
+        if count_trues >= count_falses:
+            print("Node wins election for term ", str(self.log_manager.current_term))
+
+            self.log_manager.reset_votes(self.peers)
+            self.leader()
+
+    def respond_client(self, socket, message):
+        if message["type"] == "status" and message["method"] == "GET":
+            socket.send_json({"role": self.role, "term": self.log_manager.current_term})
+
+        elif self.role == 'Leader':
+            if message["type"] == "topic" and message["method"] == "PUT":
+                if message["topic"] not in self.log_manager.keys() and isinstance(message["topic"], str):
+                    self.log_manager.set(message["topic"], [])
+                    socket.send_json({"success": True})
+                else:
+                    socket.send_json({"success": False})
+            elif message["type"] == "topic" and message["method"] == "GET":
+                socket.send_json({"success": True, "topics": self.log_manager.keys()})
+
+            elif message["type"] == "message" and message["method"] == "PUT":
+                if message["topic"] in self.log_manager.keys() and isinstance(message["topic"], str) and isinstance(message["message"], str):
+                    self.log_manager.append(message["topic"], message["message"])
+                    socket.send_json({"success": True})
+                else:
+                    socket.send_json({"success": False})
+            elif message["type"] == "message" and message["method"] == "GET":
+                if isinstance(message["topic"], str) and self.log_manager.data.get(message["topic"]):
+                    socket.send_json({"success": True, "message": self.log_manager.pop(message["topic"])})
+                else:
+                    socket.send_json({"success": False})
+        else:
+            socket.send_json({"success": False})
 
     def parse_config_json(self, fp, idx):
         config_json = json.load(open(fp))

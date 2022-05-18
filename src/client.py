@@ -30,7 +30,7 @@ def client(ip, port):
             print("Message sent!")
 
             response = socket.recv_json()
-            print("Received message from server: ", response)
+            print("Received response message from server: ", response)
             
     except KeyboardInterrupt:
         socket.close()
