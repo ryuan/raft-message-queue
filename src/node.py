@@ -16,14 +16,21 @@ class Node:
 
         self.role = 'Follower'
 
+        self.appended_entry_record = {}
+        self.current_entry = None
+        self.current_entry_committed = False
+
         self.commit_index = 0
         self.last_applied = 0
+
+        self.latest_leader = None
 
         self.log_manager = LogManager(self.port, self.peers)
 
         self.election_countdown = ResettableTimer(self.start_election)
         self.heartbeat_countdown = None
 
+        self.reset_appended_entry_record()
         self.start_listening()
         self.follower()
 
@@ -114,7 +121,7 @@ class Node:
             ).to_message()
         )
 
-        self.heartbeat_countdown = ResettableTimer(self.heartbeat, interval_lb=1000, interval_ub=1200)
+        self.heartbeat_countdown = ResettableTimer(self.heartbeat, interval_lb=750, interval_ub=750)
         self.heartbeat_countdown.start()
         print("Heartbeat timer started with timeout of: " + str(self.heartbeat_countdown.gen_time))
 
@@ -122,10 +129,11 @@ class Node:
         print("Broadcasting request message to peers:", message)
         print("Identified peers: ", self.peers)
 
-        peer_context = zmq.Context()
+        peer_context = zmq.Context().instance()
 
         for ip, port in self.peers:
             peer_socket = peer_context.socket(zmq.REQ)
+            # peer_socket.setsockopt(zmq.LINGER, 0)
             peer_socket.connect(f"tcp://{ip}:{port}")
 
             try:
@@ -136,6 +144,8 @@ class Node:
             except Exception as e:
                 print("Closing socket due to error ", str(e))
                 peer_socket.close()
+
+        # peer_context.destroy()
 
     def respond_server(self, socket, message):
         if message["type"] == "vote" and message["method"] == "REQ":
@@ -153,7 +163,7 @@ class Node:
             socket.send_json(response)
 
             self.log_manager.voted_for = request.candidate_id
-            self.send_result(request.candidate_id, response)
+            self.send_message(request.candidate_id, response)
         elif message["type"] == "vote" and message["method"] == "RES":
             v_port, v_term, vote = message["message"]["port"], message["message"]["term"], message["message"]["vote"]
 
@@ -175,27 +185,32 @@ class Node:
                 self.log_manager.current_term = request.term
 
                 # need to update log and data
+                self.latest_leader = request.leader_id
                 pass
 
-                result = {"term": self.log_manager.current_term, "success": True}
+                result = {"port": self.port, "term": self.log_manager.current_term, "success": True}
 
             response = {"type": "heartbeat", "method": "RES", "message": result}
             socket.send_json(response)
 
-            self.send_result(request.leader_id, response)
+            self.send_message(request.leader_id, response)
         elif message["type"] == "heartbeat" and message["method"] == "RES":
-            f_term, f_success = message["message"]["term"], message["message"]["success"]
+            f_port, f_term, f_success = message["message"]["port"], message["message"]["term"], message["message"]["success"]
 
-            # double check that term from response is higher
+            # double check that term from response is higher (for failure case)
             if f_success == False and f_term > self.log_manager.current_term:
                 # need to update log and data to term
                 pass
+            else:
+                # otherwise append entry successful at follower, so record and check to commit
+                self.process_appended_entry(f_port)
 
             socket.send_json("ok")
 
-    def send_result(self, rec_port, message):
+    def send_message(self, rec_port, message):
         context = zmq.Context()
         socket = context.socket(zmq.REQ)
+        socket.setsockopt(zmq.LINGER, 0)
 
         for ip, port in self.peers:
             if port == rec_port:
@@ -205,10 +220,11 @@ class Node:
             socket.send_json(message)
             print(f"Sent result to {rec_port}: {message}")
             time.sleep(1e-5)
-            socket.close()
 
             response = socket.recv_json()
             print(f"Received response from {rec_port}: {response}")
+
+            socket.close()
         except Exception as e:
             print("Closing socket due to error ", str(e))
             socket.close()
@@ -219,13 +235,35 @@ class Node:
         count_trues = len(list(filter(lambda x: x is True, self.log_manager.votes_collected.values())))
         count_falses = len(list(filter(lambda x: x is False, self.log_manager.votes_collected.values())))
 
-        print(count_trues)
-        print(count_falses)
         if count_trues >= count_falses:
             print("Node wins election for term ", str(self.log_manager.current_term))
 
-            self.log_manager.reset_votes(self.peers)
             self.leader()
+            self.log_manager.reset_votes(self.peers)
+
+    def process_appended_entry(self, port):
+        self.appended_entry_record[port] = True
+
+        count_trues = len(list(filter(lambda x: x is True, self.appended_entry_record.values())))
+        count_falses = len(list(filter(lambda x: x is False, self.appended_entry_record.values())))
+
+        if count_trues >= count_falses:
+            print("Committing entry: ", self.current_entry)
+
+            self.current_entry_committed = True
+
+            self.log_manager.commit_to_state_machine(self.current_entry)
+            commit = {"port": self.port, "entry": self.current_entry}
+            message = {"type": "commit", "method": "REQ", "message": commit}
+            self.broadcast(message)
+
+            self.current_entry_committed = False
+            
+            self.reset_appended_entry_record()
+
+    def reset_appended_entry_record(self):
+        for ip, port in self.peers:
+            self.appended_entry_record[port] = False
 
     def respond_client(self, socket, message):
         if message["type"] == "status" and message["method"] == "GET":
@@ -252,6 +290,10 @@ class Node:
                     socket.send_json({"success": True, "message": self.log_manager.pop(message["topic"])})
                 else:
                     socket.send_json({"success": False})
+
+        elif self.role != 'Leader':
+            self.send_message(self.latest_leader, message)
+
         else:
             socket.send_json({"success": False})
 
