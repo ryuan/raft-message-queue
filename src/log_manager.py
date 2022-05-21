@@ -97,12 +97,14 @@ class LogManager:
             if message["type"] == "topic" and message["method"] == "PUT":
                 self.set(message["topic"], [])
                 print(f"Committed entry to state machine: topic <{message['topic']}> created")
+                return None
             elif message["type"] == "message" and message["method"] == "PUT":
                 self.append(message["topic"],message["message"])
                 print(f"Committed entry to state machine: topic <{message['topic']}> updated with message <{message['message']}>")
+                return None
             elif message["type"] == "message" and message["method"] == "GET":
                 popped_message = self.pop(message["topic"])
                 print(f"Committed entry to state machine: topic <{message['topic']}> popped message <{popped_message}>")
                 return popped_message
             else:
-                pass
+                return None

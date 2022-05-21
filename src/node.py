@@ -19,6 +19,7 @@ class Node:
         self.appended_entry_record = {}
         self.current_entry = None
         self.current_entry_committed = False
+        self.popped_message = None
 
         self.commit_index = 0
         self.last_applied = 0
@@ -281,7 +282,7 @@ class Node:
             if self.last_applied < self.log_manager.last_log_index:
                 self.log_manager.catch_up(self.last_applied)
 
-            self.log_manager.commit_to_state_machine(self.current_entry)
+            self.popped_message = self.log_manager.commit_to_state_machine(self.current_entry)
             self.commit_index = self.log_manager.last_log_index
             self.last_applied = self.commit_index
 
@@ -323,7 +324,7 @@ class Node:
             elif message["type"] == "message" and message["method"] == "GET":
                 if isinstance(message["topic"], str) and self.log_manager.data.get(message["topic"]):
                     self.update_logs(message)
-                    socket.send_json({"success": True, "message": self.log_manager.pop(message["topic"])})
+                    socket.send_json({"success": True, "message": self.popped_message})
                 else:
                     socket.send_json({"success": False})
 
