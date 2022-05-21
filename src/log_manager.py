@@ -1,6 +1,4 @@
 import threading
-import os
-from urllib import response
 
 
 class LogManager:
@@ -86,27 +84,25 @@ class LogManager:
 
         print("Log after appending entry: ", self.log)
 
+    def catch_up(self, index):
+        for entry in self.log[index:self.last_log_index]:
+            self.commit_to_state_machine(entry)
+
     def commit_to_state_machine(self, entry):
         print("Committing this entry to state machine: ", entry)
 
-        log_entry = {"term": self.last_log_term, "entry": entry}
+        message = entry["message"]
 
         with self.client_lock:
-            self.last_log_term = entry["message"]["term"]
-
-            if entry["type"] == "topic" and entry["method"] == "PUT":
-                self.log.append(log_entry)
-                self.set(entry["topic"], [])
-                response = f"Committed entry to state machine: topic <{entry['topic']}> created"
-            elif entry["type"] == "message" and entry["method"] == "PUT":
-                self.log.append(log_entry)
-                self.append(entry["topic"],entry["message"])
-                response = f"Committed entry to state machine: topic <{entry['topic']}> updated with message <{entry['message']}>"
-            elif entry["type"] == "message" and entry["method"] == "GET":
-                self.log.append(log_entry)
-                popped_message = self.pop(entry["topic"])
-                response = f"Committed entry to state machine: topic <{entry['topic']}> popped message <{popped_message}>"
+            if message["type"] == "topic" and message["method"] == "PUT":
+                self.set(message["topic"], [])
+                print(f"Committed entry to state machine: topic <{message['topic']}> created")
+            elif message["type"] == "message" and message["method"] == "PUT":
+                self.append(message["topic"],message["message"])
+                print(f"Committed entry to state machine: topic <{message['topic']}> updated with message <{message['message']}>")
+            elif message["type"] == "message" and message["method"] == "GET":
+                popped_message = self.pop(message["topic"])
+                print(f"Committed entry to state machine: topic <{message['topic']}> popped message <{popped_message}>")
+                return popped_message
             else:
                 pass
-
-        return response
