@@ -37,8 +37,8 @@ class LogManager:
         return self.data.get(key).pop(0)
 
     def reset_votes(self, peers):
-        for ip, port in peers:
-            self.votes_collected[port] = False
+        for ip, port, int_port in peers:
+            self.votes_collected[int_port] = False
 
     def term_at_index(self, prev_log_index):
         if len(self.log)-1 >= prev_log_index:
@@ -85,8 +85,9 @@ class LogManager:
         print("Log after appending entry: ", self.log)
 
     def catch_up(self, index):
-        for entry in self.log[index:self.last_log_index]:
-            self.commit_to_state_machine(entry)
+        for i, entry in enumerate(self.log[index:self.last_log_index]):
+            if i != 0:
+                self.commit_to_state_machine(entry)
 
     def commit_to_state_machine(self, entry):
         print("Committing this entry to state machine: ", entry)

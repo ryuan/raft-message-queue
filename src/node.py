@@ -12,7 +12,7 @@ from append_entries_rpc import AppendEntries
 
 class Node:
     def __init__(self, fp, idx):
-        self.ip, self.port, self.peers = self.parse_config_json(fp, idx)
+        self.ip, self.port, self.int_port, self.peers = self.parse_config_json(fp, idx)
 
         self.role = 'Follower'
 
@@ -26,7 +26,7 @@ class Node:
 
         self.latest_leader = None
 
-        self.log_manager = LogManager(self.port, self.peers)
+        self.log_manager = LogManager(self.int_port, self.peers)
 
         self.election_countdown = ResettableTimer(self.start_election)
         self.heartbeat_countdown = None
@@ -34,33 +34,6 @@ class Node:
         self.reset_appended_entry_record()
         self.start_listening()
         self.follower()
-
-    def start_listening(self):
-        self.listener_thread = Thread(target=self.listen, args=(self.ip, self.port))
-        self.listener_thread.start()
-
-    def listen(self, ip, port):
-        context = zmq.Context()
-        socket = context.socket(zmq.REP)
-
-        socket.setsockopt(zmq.LINGER, 0)
-        socket.bind(f"tcp://{ip}:{port}")
-        print(f"Bound to server on port {port}")
-
-        try:
-            while True:
-                message = socket.recv_json()
-                print("Received message: ", message)
-
-                if message["type"] == "vote" or message["type"] == "append":
-                    self.respond_server(socket, message)
-                else:
-                    self.respond_client(socket, message)
-
-                time.sleep(1e-5)
-        except:
-            socket.close()
-            context.term()
 
     def follower(self):
         print("\nNode is running as a follower.")
@@ -88,14 +61,14 @@ class Node:
         self.election_countdown.reset()
         print("Election timer started with timeout of: " + str(self.election_countdown.gen_time))
 
-        self.log_manager.voted_for = self.port
-        self.process_vote(self.port)
+        self.log_manager.voted_for = self.int_port
+        self.process_vote(self.int_port)
 
         if self.role != 'Leader':
             self.broadcast(
                 RequestVote(
                     term=self.log_manager.current_term, 
-                    candidate_id=self.port, 
+                    candidate_id=self.int_port, 
                     last_log_index=self.log_manager.last_log_index, 
                     last_log_term=self.log_manager.last_log_term
                 ).to_message()
@@ -114,7 +87,7 @@ class Node:
         self.broadcast(
             AppendEntries(
                 term=self.log_manager.current_term,
-                leader_id=self.port,
+                leader_id=self.int_port,
                 prev_log_index=self.log_manager.last_log_index,
                 prev_log_term=self.log_manager.last_log_term,
                 entries=[],
@@ -122,7 +95,7 @@ class Node:
             ).to_message()
         )
 
-        self.heartbeat_countdown = ResettableTimer(self.heartbeat, interval_lb=750, interval_ub=750)
+        self.heartbeat_countdown = ResettableTimer(self.heartbeat, interval_lb=5000, interval_ub=5000)
         self.heartbeat_countdown.start()
         print("Heartbeat timer started with timeout of: " + str(self.heartbeat_countdown.gen_time))
 
@@ -132,21 +105,19 @@ class Node:
 
         peer_context = zmq.Context().instance()
 
-        for ip, port in self.peers:
+        for ip, port, int_port in self.peers:
             peer_socket = peer_context.socket(zmq.REQ)
             # peer_socket.setsockopt(zmq.LINGER, 0)
-            peer_socket.connect(f"tcp://{ip}:{port}")
+            peer_socket.connect(f"tcp://{ip}:{int_port}")
 
             try:
-                print(f"Sending request to port {port}")
+                print(f"Sending request to port {int_port}")
                 peer_socket.send_json(message)
                 time.sleep(1e-5)
                 peer_socket.close()
             except Exception as e:
                 print("Closing socket due to error ", str(e))
                 peer_socket.close()
-
-        # peer_context.destroy()
 
     def respond_server(self, socket, message):
         if message["type"] == "vote" and message["method"] == "REQ":
@@ -156,9 +127,9 @@ class Node:
                 and request.last_log_index >= self.log_manager.last_log_index 
                 and request.last_log_term >= self.log_manager.last_log_term
                 and (self.log_manager.voted_for == None or self.log_manager.voted_for == request.candidate_id)):
-                result = {"port": self.port, "term": self.log_manager.current_term, "vote": True}
+                result = {"port": self.int_port, "term": self.log_manager.current_term, "vote": True}
             else:
-                result = {"port": self.port, "term": self.log_manager.current_term, "vote": False}
+                result = {"port": self.int_port, "term": self.log_manager.current_term, "vote": False}
 
             response = {"type": "vote", "method": "RES", "message": result}
             socket.send_json(response)
@@ -169,7 +140,7 @@ class Node:
             v_port, v_term, vote = message["message"]["port"], message["message"]["term"], message["message"]["vote"]
 
             if vote == True:
-                if self.role is not "Leader":
+                if self.role != "Leader":
                     self.process_vote(v_port)
             else:
                 pass
@@ -182,7 +153,7 @@ class Node:
             min_index_of_term = self.log_manager.min_index_of_term(term_at_req_index)
 
             if request.term < self.log_manager.current_term:
-                result = {"port": self.port, "term": self.log_manager.current_term, "earliest_index_of_term": min_index_of_term, "max_term_at_tried_index": term_at_req_index, "success": False}
+                result = {"port": self.int_port, "term": self.log_manager.current_term, "earliest_index_of_term": min_index_of_term, "max_term_at_tried_index": term_at_req_index, "success": False}
             else:
                 self.follower()
                 if self.heartbeat_countdown:
@@ -200,9 +171,9 @@ class Node:
                     if request.leader_commit > self.commit_index:
                         self.commit_index = min(request.leader_commit, self.log_manager.last_log_index)
 
-                    result = {"port": self.port, "term": self.log_manager.current_term, "earliest_index_of_term": min_index_of_term, "max_term_at_tried_index": self.log_manager.current_term, "success": True}
+                    result = {"port": self.int_port, "term": self.log_manager.current_term, "earliest_index_of_term": min_index_of_term, "max_term_at_tried_index": term_at_req_index, "success": True}
                 else:
-                    result = {"port": self.port, "term": self.log_manager.current_term, "earliest_index_of_term": min_index_of_term, "max_term_at_tried_index": self.log_manager.current_term, "success": False}
+                    result = {"port": self.int_port, "term": self.log_manager.current_term, "earliest_index_of_term": min_index_of_term, "max_term_at_tried_index": term_at_req_index, "success": False}
 
             response = {"type": "append", "method": "RES", "message": result}
             socket.send_json(response)
@@ -216,6 +187,7 @@ class Node:
                     self.process_appended_entry(r_port)
             elif r_term > self.log_manager.current_term:
                 self.log_manager.current_term = r_term
+                self.cleanup()
                 self.follower()
             else:
                 if self.log_manager.max_index_of_term(r_indexed_term) is not None:
@@ -227,7 +199,7 @@ class Node:
 
                 message = AppendEntries(
                     term=self.log_manager.current_term,
-                    leader_id=self.port,
+                    leader_id=self.int_port,
                     prev_log_index=new_attempt_index,
                     prev_log_term=new_attempt_term,
                     entries=[new_attempt_entries],
@@ -243,8 +215,8 @@ class Node:
         socket = context.socket(zmq.REQ)
         socket.setsockopt(zmq.LINGER, 0)
 
-        for ip, port in self.peers:
-            if port == rec_port:
+        for ip, port, int_port in self.peers:
+            if int_port == rec_port:
                 socket.connect(f"tcp://{ip}:{rec_port}")
 
         try:
@@ -289,7 +261,7 @@ class Node:
             self.last_applied = self.commit_index
 
             self.current_entry_committed = True
-            commit = {"port": self.port, "entry": self.current_entry}
+            commit = {"port": self.int_port, "entry": self.current_entry}
             message = {"type": "commit", "method": "REQ", "message": commit}
             self.broadcast(message)
 
@@ -299,8 +271,8 @@ class Node:
             self.reset_appended_entry_record()
 
     def reset_appended_entry_record(self):
-        for ip, port in self.peers:
-            self.appended_entry_record[port] = False
+        for ip, port, int_port in self.peers:
+            self.appended_entry_record[int_port] = False
 
     def respond_client(self, socket, message):
         if message["type"] == "status" and message["method"] == "GET":
@@ -342,12 +314,12 @@ class Node:
         self.current_entry = log_entry
         self.log_manager.append_to_log(log_entry)
 
-        prev_log_index = self.log_manager.last_log_index - 1, # reverse the increment from appending to leader's log
+        prev_log_index = self.log_manager.last_log_index - 1 # reverse the increment from appending to leader's log
 
         self.broadcast(
             AppendEntries(
                 term=self.log_manager.current_term,
-                leader_id=self.port,
+                leader_id=self.int_port,
                 prev_log_index=prev_log_index,
                 prev_log_term=self.log_manager.log[prev_log_index]["term"],
                 entries=[log_entry],
@@ -358,19 +330,70 @@ class Node:
         while not self.current_entry_committed:
             pass
 
+    def start_listening(self):
+        self.server_listener_thread = Thread(target=self.s_listen, args=())
+        self.server_listener_thread.start()
+
+        self.client_listener_thread = Thread(target=self.c_listen, args=())
+        self.client_listener_thread.start()
+
+    def s_listen(self):
+        context = zmq.Context()
+        s_socket = context.socket(zmq.REP)
+        s_socket.setsockopt(zmq.LINGER, 0)
+        s_socket.bind(f"tcp://{self.ip}:{self.int_port}")
+        print(f"Bound to servers on port {self.int_port}")
+
+        try:
+            while True:
+                message = s_socket.recv_json()
+                print("Received message: ", message)
+                self.respond_server(s_socket, message)
+                time.sleep(1e-5)
+        except:
+            s_socket.close()
+            context.term()
+
+    def c_listen(self):
+        context = zmq.Context()
+        c_socket = context.socket(zmq.REP)
+        c_socket.setsockopt(zmq.LINGER, 0)
+        c_socket.bind(f"tcp://{self.ip}:{self.port}")
+        print(f"Bound to clients on port {self.port}")
+
+        try:
+            while True:
+                message = c_socket.recv_json()
+                print("Received message: ", message)
+                self.respond_client(c_socket, message)
+                time.sleep(1e-5)
+        except:
+            c_socket.close()
+            context.term()
+
+    def cleanup(self):
+        self.reset_appended_entry_record()
+        self.current_entry = None
+        self.current_entry_committed = False
+        self.popped_message = None
+        self.commit_index = 0
+        self.last_applied = 0
+        self.latest_leader = None
+        self.heartbeat_countdown = None
+
     def parse_config_json(self, fp, idx):
         config_json = json.load(open(fp))
 
-        my_ip, my_port = None, None
+        my_ip, my_port, my_int_port = None, None, None
         peers = []
         for i, address in enumerate(config_json["addresses"]):
-            ip, port = address["ip"], address["port"]
+            ip, port, int_port = address["ip"], address["port"], address["internal_port"]
             if i == idx:
-                my_ip, my_port = ip, port
+                my_ip, my_port, my_int_port = ip, port, int_port
             else:
-                peers.append((ip, port))
+                peers.append((ip, port, int_port))
 
-        return my_ip, my_port, peers
+        return my_ip, my_port, my_int_port, peers
 
 
 if __name__ == "__main__":
