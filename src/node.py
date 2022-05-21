@@ -263,11 +263,11 @@ class Node:
             self.last_applied = self.commit_index
 
             self.current_entry_committed = True
+            message = {"type": "commit", "method": "REQ", "success": True}
+            self.broadcast(message)
+
             self.current_entry = None
             self.current_entry_committed = False
-
-            # message = {"type": "commit", "method": "REQ", "success": True}
-            # self.broadcast(message)
             
             self.reset_appended_entry_record()
 
