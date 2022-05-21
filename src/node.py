@@ -169,7 +169,8 @@ class Node:
             v_port, v_term, vote = message["message"]["port"], message["message"]["term"], message["message"]["vote"]
 
             if vote == True:
-                self.process_vote(v_port)
+                if self.role is not "Leader":
+                    self.process_vote(v_port)
             else:
                 pass
 
@@ -177,7 +178,7 @@ class Node:
         elif message["type"] == "append" and message["method"] == "REQ":
             request = AppendEntries.from_message(message)
 
-            term_at_req_index = self.log_manager.log[request.prev_log_index]["term"]
+            term_at_req_index = self.log_manager.term_at_index(request.prev_log_index)
             min_index_of_term = self.log_manager.min_index_of_term(term_at_req_index)
 
             if request.term < self.log_manager.current_term:
@@ -211,7 +212,8 @@ class Node:
             r_port, r_term, r_min_term_index, r_indexed_term, r_success = message["message"]["port"], message["message"]["term"], message["message"]["earliest_index_of_term"], message["message"]["max_term_at_tried_index"], message["message"]["success"]
 
             if r_success == True:
-                self.process_appended_entry(r_port)
+                if self.current_entry is not None:
+                    self.process_appended_entry(r_port)
             elif r_term > self.log_manager.current_term:
                 self.log_manager.current_term = r_term
                 self.follower()
@@ -291,6 +293,7 @@ class Node:
             message = {"type": "commit", "method": "REQ", "message": commit}
             self.broadcast(message)
 
+            self.current_entry = None
             self.current_entry_committed = False
             
             self.reset_appended_entry_record()
