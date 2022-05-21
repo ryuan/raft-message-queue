@@ -95,7 +95,7 @@ class Node:
             ).to_message()
         )
 
-        self.heartbeat_countdown = ResettableTimer(self.heartbeat, interval_lb=750, interval_ub=750)
+        self.heartbeat_countdown = ResettableTimer(self.heartbeat, interval_lb=4000, interval_ub=4000)
         self.heartbeat_countdown.start()
         print("Heartbeat timer started with timeout of: " + str(self.heartbeat_countdown.gen_time))
 
@@ -209,6 +209,8 @@ class Node:
                 self.send_message(r_port, message)
 
             socket.send_json("ok")
+        elif message["type"] == "commit" and message["method"] == "REQ":
+            pass
 
     def send_message(self, rec_port, message):
         context = zmq.Context()
@@ -261,12 +263,11 @@ class Node:
             self.last_applied = self.commit_index
 
             self.current_entry_committed = True
-            commit = {"port": self.int_port, "entry": self.current_entry}
-            message = {"type": "commit", "method": "REQ", "message": commit}
-            self.broadcast(message)
-
             self.current_entry = None
             self.current_entry_committed = False
+
+            # message = {"type": "commit", "method": "REQ", "success": True}
+            # self.broadcast(message)
             
             self.reset_appended_entry_record()
 
@@ -376,9 +377,6 @@ class Node:
         self.current_entry = None
         self.current_entry_committed = False
         self.popped_message = None
-        self.commit_index = 0
-        self.last_applied = 0
-        self.latest_leader = None
         self.heartbeat_countdown = None
 
     def parse_config_json(self, fp, idx):
