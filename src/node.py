@@ -95,7 +95,7 @@ class Node:
             ).to_message()
         )
 
-        self.heartbeat_countdown = ResettableTimer(self.heartbeat, interval_lb=5000, interval_ub=5000)
+        self.heartbeat_countdown = ResettableTimer(self.heartbeat, interval_lb=750, interval_ub=750)
         self.heartbeat_countdown.start()
         print("Heartbeat timer started with timeout of: " + str(self.heartbeat_countdown.gen_time))
 
