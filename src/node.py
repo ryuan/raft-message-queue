@@ -51,7 +51,7 @@ class Node:
                 message = socket.recv_json()
                 print("Received message: ", message)
 
-                if message["type"] == "vote" or message["type"] == "heartbeat":
+                if message["type"] == "vote" or message["type"] == "append":
                     self.respond_server(socket, message)
                 else:
                     self.respond_client(socket, message)
@@ -173,37 +173,65 @@ class Node:
                 pass
 
             socket.send_json("ok")
-        elif message["type"] == "heartbeat" and message["method"] == "REQ":
+        elif message["type"] == "append" and message["method"] == "REQ":
             request = AppendEntries.from_message(message)
 
+            term_at_req_index = self.log_manager.log[request.prev_log_index]["term"]
+            min_index_of_term = self.log_manager.min_index_of_term(term_at_req_index)
+
             if request.term < self.log_manager.current_term:
-                result = {"port": self.port, "term": self.log_manager.current_term, "success": False}
+                result = {"port": self.port, "term": self.log_manager.current_term, "earliest_index_of_term": min_index_of_term, "max_term_at_tried_index": term_at_req_index, "success": False}
             else:
                 self.follower()
                 if self.heartbeat_countdown:
                     self.heartbeat_countdown = None
+                    
                 self.log_manager.current_term = request.term
-
-                # need to update log and data
                 self.latest_leader = request.leader_id
-                pass
+                
+                if self.log_manager.check_log_index_term(request.prev_log_index, request.prev_log_term):
+                    self.log_manager.delete_forward_log_entries(request.prev_log_index)
 
-                result = {"port": self.port, "term": self.log_manager.current_term, "success": True}
+                    for entry in request.entries:
+                        self.log_manager.append_to_log(entry)
 
-            response = {"type": "heartbeat", "method": "RES", "message": result}
+                    if request.leader_commit > self.commit_index:
+                        self.commit_index = min(request.leader_commit, self.log_manager.last_log_index)
+
+                    result = {"port": self.port, "term": self.log_manager.current_term, "earliest_index_of_term": min_index_of_term, "max_term_at_tried_index": self.log_manager.current_term, "success": True}
+                else:
+                    result = {"port": self.port, "term": self.log_manager.current_term, "earliest_index_of_term": min_index_of_term, "max_term_at_tried_index": self.log_manager.current_term, "success": False}
+
+            response = {"type": "append", "method": "RES", "message": result}
             socket.send_json(response)
 
             self.send_message(request.leader_id, response)
-        elif message["type"] == "heartbeat" and message["method"] == "RES":
-            f_port, f_term, f_success = message["message"]["port"], message["message"]["term"], message["message"]["success"]
+        elif message["type"] == "append" and message["method"] == "RES":
+            r_port, r_term, r_min_term_index, r_indexed_term, r_success = message["message"]["port"], message["message"]["term"], message["message"]["earliest_index_of_term"], message["message"]["max_term_at_tried_index"], message["message"]["success"]
 
-            # double check that term from response is higher (for failure case)
-            if f_success == False and f_term > self.log_manager.current_term:
-                # need to update log and data to term
-                pass
+            if r_success == True:
+                self.process_appended_entry(r_port)
+            elif r_term > self.log_manager.current_term:
+                self.log_manager.current_term = r_term
+                self.follower()
             else:
-                # otherwise append entry successful at follower, so record and check to commit
-                self.process_appended_entry(f_port)
+                if self.log_manager.max_index_of_term(r_indexed_term) is not None:
+                    new_attempt_index = self.log_manager.max_index_of_term(r_indexed_term)
+                else:
+                    new_attempt_index = r_min_term_index - 1
+                new_attempt_term = self.log_manager.log[new_attempt_index]["term"]
+                new_attempt_entries = self.log_manager.fetch_entries(new_attempt_index)
+
+                message = AppendEntries(
+                    term=self.log_manager.current_term,
+                    leader_id=self.port,
+                    prev_log_index=new_attempt_index,
+                    prev_log_term=new_attempt_term,
+                    entries=[new_attempt_entries],
+                    leader_commit=self.commit_index
+                ).to_message()
+
+                self.send_message(r_port, message)
 
             socket.send_json("ok")
 
@@ -250,9 +278,10 @@ class Node:
         if count_trues >= count_falses:
             print("Committing entry: ", self.current_entry)
 
-            self.current_entry_committed = True
-
             self.log_manager.commit_to_state_machine(self.current_entry)
+            # need to update commit_index
+
+            self.current_entry_committed = True
             commit = {"port": self.port, "entry": self.current_entry}
             message = {"type": "commit", "method": "REQ", "message": commit}
             self.broadcast(message)
@@ -272,7 +301,8 @@ class Node:
         elif self.role == 'Leader':
             if message["type"] == "topic" and message["method"] == "PUT":
                 if message["topic"] not in self.log_manager.keys() and isinstance(message["topic"], str):
-                    self.log_manager.set(message["topic"], [])
+                    self.update_logs(message)
+                    # self.log_manager.set(message["topic"], [])
                     socket.send_json({"success": True})
                 else:
                     socket.send_json({"success": False})
@@ -281,12 +311,14 @@ class Node:
 
             elif message["type"] == "message" and message["method"] == "PUT":
                 if message["topic"] in self.log_manager.keys() and isinstance(message["topic"], str) and isinstance(message["message"], str):
-                    self.log_manager.append(message["topic"], message["message"])
+                    self.update_logs(message)
+                    # self.log_manager.append(message["topic"], message["message"])
                     socket.send_json({"success": True})
                 else:
                     socket.send_json({"success": False})
             elif message["type"] == "message" and message["method"] == "GET":
                 if isinstance(message["topic"], str) and self.log_manager.data.get(message["topic"]):
+                    self.update_logs(message)
                     socket.send_json({"success": True, "message": self.log_manager.pop(message["topic"])})
                 else:
                     socket.send_json({"success": False})
@@ -296,6 +328,27 @@ class Node:
 
         else:
             socket.send_json({"success": False})
+
+    def update_logs(self, message):
+        log_entry = self.log_manager.make_entry(message)
+        self.current_entry = log_entry
+        self.log_manager.append_to_log(log_entry)
+
+        prev_log_index = self.log_manager.last_log_index - 1, # reverse the increment from appending to leader's log
+
+        self.broadcast(
+            AppendEntries(
+                term=self.log_manager.current_term,
+                leader_id=self.port,
+                prev_log_index=prev_log_index,
+                prev_log_term=self.log_manager.log[prev_log_index]["term"],
+                entries=[log_entry],
+                leader_commit=self.commit_index
+            ).to_message()
+        )
+
+        while not self.current_entry_committed:
+            pass
 
     def parse_config_json(self, fp, idx):
         config_json = json.load(open(fp))

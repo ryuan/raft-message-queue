@@ -11,7 +11,7 @@ class AppendEntries:
     leader_commit: int
 
     def to_message(self):
-        message = {"type": "heartbeat", "method": "REQ", "message": asdict(self)}
+        message = {"type": "append", "method": "REQ", "message": asdict(self)}
         return message
 
     @classmethod
