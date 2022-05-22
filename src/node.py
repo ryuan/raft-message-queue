@@ -84,6 +84,7 @@ class Node:
         self.heartbeat()
 
     def heartbeat(self):
+        print("\nSending heartbeat...")
         self.broadcast(
             AppendEntries(
                 term=self.log_manager.current_term,
@@ -171,7 +172,9 @@ class Node:
                     if request.leader_commit > self.commit_index:
                         self.commit_index = min(request.leader_commit, self.log_manager.last_log_index)
 
+                    print(f"------------commit_index: {self.commit_index}, last_log_index: {self.log_manager.last_log_index}, last_applied: {self.last_applied}------------")
                     if self.commit_index > self.last_applied:
+                        print("--------committing to follower's state machine-------------")
                         self.commit_past_entries(self.last_applied, self.commit_index)
 
                     result = {"port": self.int_port, "term": self.log_manager.current_term, "earliest_index_of_term": min_index_of_term, "max_term_at_tried_index": term_at_req_index, "success": True}
@@ -213,7 +216,7 @@ class Node:
 
             socket.send_json("ok")
         elif message["type"] == "commit" and message["method"] == "REQ":
-            if message["success"] == True:
+            if message["success"] == True and self.commit_index > self.last_applied:
                 self.commit_past_entries(self.last_applied, self.commit_index+1)
 
             socket.send_json("ok")
@@ -261,7 +264,7 @@ class Node:
         if count_trues >= count_falses:
             print("Committing entry: ", self.current_entry)
 
-            self.commit_past_entries(self.last_applied, self.log_manager.last_log_index)
+            self.commit_past_entries(self.last_applied, self.log_manager.last_log_index-1)
             self.popped_message = self.log_manager.commit_to_state_machine(self.current_entry)
 
             self.current_entry_committed = True
@@ -274,8 +277,8 @@ class Node:
             self.reset_appended_entry_record()
 
     def commit_past_entries(self, start_i, end_i):
-        self.log_manager.catch_up(start_i, end_i)
-        self.commit_index = min(self.commit_index, end_i)
+        self.log_manager.catch_up(start_i, end_i+1)
+        self.commit_index = end_i
         self.last_applied = self.commit_index
 
     def reset_appended_entry_record(self):
