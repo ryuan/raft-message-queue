@@ -210,7 +210,11 @@ class Node:
 
             socket.send_json("ok")
         elif message["type"] == "commit" and message["method"] == "REQ":
-            pass
+            if message["success"] == True:
+                self.log_manager.catch_up(self.last_applied, self.commit_index+1)
+                self.last_applied = self.commit_index
+
+            socket.send_json("ok")
 
     def send_message(self, rec_port, message):
         context = zmq.Context()
@@ -256,7 +260,7 @@ class Node:
             print("Committing entry: ", self.current_entry)
 
             if self.last_applied < self.log_manager.last_log_index:
-                self.log_manager.catch_up(self.last_applied)
+                self.log_manager.catch_up(self.last_applied, self.log_manager.last_log_index)
 
             self.popped_message = self.log_manager.commit_to_state_machine(self.current_entry)
             self.commit_index = self.log_manager.last_log_index
