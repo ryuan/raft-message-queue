@@ -85,7 +85,7 @@ class LogManager:
         print("Log after appending entry: ", self.log)
 
     def catch_up(self, start_i, end_i):
-        for i, entry in enumerate(self.log[start_i:end_i]):
+        for i, entry in enumerate(self.log[start_i:end_i+1]):
             if i != 0:
                 self.commit_to_state_machine(entry)
 

@@ -96,7 +96,7 @@ class Node:
             ).to_message()
         )
 
-        self.heartbeat_countdown = ResettableTimer(self.heartbeat, interval_lb=4000, interval_ub=4000)
+        self.heartbeat_countdown = ResettableTimer(self.heartbeat, interval_lb=750, interval_ub=750)
         self.heartbeat_countdown.start()
         print("Heartbeat timer started with timeout of: " + str(self.heartbeat_countdown.gen_time))
 
@@ -219,7 +219,7 @@ class Node:
             socket.send_json("ok")
         elif message["type"] == "commit" and message["method"] == "REQ":
             if message["success"] == True and self.commit_index > self.last_applied:
-                self.commit_past_entries(self.last_applied, self.commit_index+1)
+                self.commit_past_entries(self.last_applied, self.commit_index)
 
             socket.send_json("ok")
 
@@ -266,8 +266,14 @@ class Node:
         if count_trues >= count_falses:
             print("Committing entry: ", self.current_entry)
 
+            # need to decrement 1 ending index for catch_up loop since it will be committed right after
             self.commit_past_entries(self.last_applied, self.log_manager.last_log_index-1)
             self.popped_message = self.log_manager.commit_to_state_machine(self.current_entry)
+            # override variable assignments from catch_up to re-add the 1 index from line above
+            self.commit_index = self.log_manager.last_log_index
+            self.last_applied = self.commit_index
+            
+            print(f"-------commit_index: {self.commit_index}, last_applied: {self.last_applied}-------")
 
             self.current_entry_committed = True
             message = {"type": "commit", "method": "REQ", "success": True}
@@ -279,9 +285,11 @@ class Node:
             self.reset_appended_entry_record()
 
     def commit_past_entries(self, start_i, end_i):
-        self.log_manager.catch_up(start_i, end_i+1)
+        self.log_manager.catch_up(start_i, end_i)
         self.commit_index = end_i
         self.last_applied = self.commit_index
+        # print("--------key attributes after committing past entries--------")
+        # print(f"-------commit_index: {self.commit_index}, last_applied: {self.last_applied}-------")
 
     def reset_appended_entry_record(self):
         for ip, port, int_port in self.peers:
