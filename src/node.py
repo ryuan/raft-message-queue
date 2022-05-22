@@ -143,8 +143,10 @@ class Node:
             if vote == True:
                 if self.role != "Leader":
                     self.process_vote(v_port)
-            else:
-                pass
+            elif v_term > self.log_manager.current_term:
+                    self.log_manager.current_term = v_term
+                    self.cleanup()
+                    self.follower()
 
             socket.send_json("ok")
         elif message["type"] == "append" and message["method"] == "REQ":
