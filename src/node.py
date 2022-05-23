@@ -119,6 +119,7 @@ class Node:
             except Exception as e:
                 print("Closing socket due to error ", str(e))
                 peer_socket.close()
+                peer_context.term()
 
     def respond_server(self, socket, message):
         if message["type"] == "vote" and message["method"] == "REQ":
