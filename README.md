@@ -28,7 +28,7 @@ Once a candidate becomes a leader, the `leader` method is called, converting its
 
 The `heartbeat` method assigns a `ResettableTimer` object to the node's `heartbeat_downdown` attribute. The timer calls the method itself when the countdown reaches 0. The process broadcasts AppendEntries RPC with an empty entry, along with other arguments and attributes of the node as required by Raft. The RPC is implemented as an `AppendEntries` dataclass sent to peers using the `broadcast` function.
 
-This not only helps to reset election timers of the followers so that they remain as followers, but also helps to regularly update outdated logs of any followers (ex., downed servers) since the RPC contains information on the leader's latest index and its term. Even when no client requests are coming in, a recovered servered can get heartbeats, allowing it to compare it's log's latest index and term to make sure it's matching that of the leader.
+This not only helps to reset election timers of the followers so that they remain as followers, but also helps to regularly update outdated logs of any followers (ex., downed servers) since the RPC contains information on the leader's latest index and its term. Even when no client requests are coming in, a recovered server can get heartbeats, allowing it to compare it's log's latest index and term to make sure it's matching that of the leader.
 
 Ultimately, the followers take the RPC arguments and determines whether they acknowledge the sender's leadership, and sends its decision/acknowledgement using the `send_message` function. The leader in turn takes the response message and checks if it should maintain leadership based on the term of the follower returned alongside the response message.
 
